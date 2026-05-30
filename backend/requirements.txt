@@ -1,0 +1,32 @@
+# Core
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-dotenv==1.0.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# YouTube & Video Processing
+yt-dlp==2023.12.30
+youtube-transcript-api==0.6.1
+faster-whisper==0.10.0
+ffmpeg-python==0.2.0
+
+# LangChain & RAG
+langchain==0.1.0
+langchain-google-genai==0.0.3
+langchain-community==0.0.10
+langchain-huggingface==0.0.2
+chromadb==0.4.22
+sentence-transformers==2.2.2
+
+# Vector DB (Qdrant)
+qdrant-client==1.7.0
+
+# Async & Cache
+redis==5.0.1
+celery==5.3.4
+
+# Utils
+requests==2.31.0
+python-multipart==0.0.6
+tenacity==8.2.3
