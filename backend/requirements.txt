@@ -1,39 +1,34 @@
 # Core
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-dotenv==1.0.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic
+pydantic-settings
 
 # YouTube & Video Processing
-yt-dlp==2023.12.30
-youtube-transcript-api==0.6.1
-faster-whisper==0.10.0
-ffmpeg-python==0.2.0
+yt-dlp
+youtube-transcript-api
+faster-whisper
+ffmpeg-python
 
-# LangChain & RAG
-langchain==0.1.0
-langchain-google-genai==0.0.3
-langchain-community==0.0.10
-langchain-huggingface==0.0.2
+# LangChain & RAG (updated versions)
+langchain>=0.1.0
+langchain-google-genai
+langchain-community
+langchain-huggingface
 
-# Vector DB & Embeddings
-chromadb==0.4.22
-sentence-transformers==2.2.2
-qdrant-client==1.7.0
+# Vector DB & Embeddings (updated sentence-transformers)
+chromadb
+sentence-transformers>=2.6.0
+qdrant-client
 
 # Async & Cache
-redis==5.0.1
-celery==5.3.4
-aiofiles==23.2.1
+redis
+celery
+aiofiles
 
 # Utils
-requests==2.31.0
-python-multipart==0.0.6
-tenacity==8.2.3
-numpy==1.24.3
-ctranslate2==3.20.0
-
-# Additional ML
-torch==2.1.0
-transformers==4.36.0
+requests
+python-multipart
+tenacity
+numpy

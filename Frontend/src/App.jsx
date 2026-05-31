@@ -1,7 +1,11 @@
 import { useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Toaster, toast } from 'react-hot-toast'
 import VideoInputForm from './components/VideoInputForm'
 import VideoCard from './components/VideoCard'
 import ChatWindow from './components/ChatWindow'
+import LoadingModal from './components/LoadingModal'
+import Header from './components/Header'
 import './App.css'
 
 function App() {
@@ -11,73 +15,183 @@ function App() {
   const [engagementA, setEngagementA] = useState(null)
   const [engagementB, setEngagementB] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [loadingStep, setLoadingStep] = useState('')
+  const [loadingProgress, setLoadingProgress] = useState(0)
   const [error, setError] = useState(null)
 
   const handleProcessVideos = async (youtubeUrl, instagramUrl) => {
     setLoading(true)
     setError(null)
-    
+    setLoadingProgress(0)
+
+    const steps = [
+      { step: 'Extracting YouTube metadata...', progress: 10 },
+      { step: 'Fetching YouTube transcript...', progress: 25 },
+      { step: 'Processing Instagram reel...', progress: 40 },
+      { step: 'Generating transcript from audio...', progress: 60 },
+      { step: 'Calculating engagement rates...', progress: 75 },
+      { step: 'Creating embeddings & storing in vector DB...', progress: 90 },
+      { step: 'Initializing chat session...', progress: 100 }
+    ]
+
+    let stepIndex = 0
+    const interval = setInterval(() => {
+      if (stepIndex < steps.length) {
+        setLoadingStep(steps[stepIndex].step)
+        setLoadingProgress(steps[stepIndex].progress)
+        stepIndex++
+      }
+    }, 2000)
+
     try {
-      const response = await fetch('/api/process-videos', {
+      // FIXED: Use full backend URL instead of relative path
+      const response = await fetch('http://localhost:8000/api/v1/process-videos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ youtube_url: youtubeUrl, instagram_url: instagramUrl })
       })
-      
-      if (!response.ok) throw new Error('Failed to process videos')
-      
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Failed to process videos')
+      }
+
       const data = await response.json()
       setSessionId(data.session_id)
       setVideoA(data.video_a)
       setVideoB(data.video_b)
       setEngagementA(data.engagement_a)
       setEngagementB(data.engagement_b)
+
+      toast.success('Videos processed successfully!', {
+        duration: 4000,
+        icon: '🎉',
+        style: { background: '#10B981', color: 'white' }
+      })
+
     } catch (err) {
+      console.error('Error:', err)
       setError(err.message)
+      toast.error(err.message, {
+        duration: 5000,
+        icon: '❌',
+        style: { background: '#EF4444', color: 'white' }
+      })
     } finally {
+      clearInterval(interval)
       setLoading(false)
+      setLoadingStep('')
+      setLoadingProgress(0)
     }
   }
 
+  const resetApp = () => {
+    setSessionId(null)
+    setVideoA(null)
+    setVideoB(null)
+    setEngagementA(null)
+    setEngagementB(null)
+    setError(null)
+    toast('Ready for new comparison!', { icon: '🔄' })
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 py-6">
-          <h1 className="text-3xl font-bold text-gray-900">
-            RAG Video Chatbot
-          </h1>
-          <p className="text-gray-600 mt-2">
-            Compare YouTube and Instagram videos with AI
-          </p>
-        </div>
-      </header>
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50">
+      <Toaster position="top-right" />
+
+      <Header />
 
       <main className="max-w-7xl mx-auto px-4 py-8">
-        <VideoInputForm onSubmit={handleProcessVideos} loading={loading} />
-        
-        {error && (
-          <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
-            Error: {error}
-          </div>
-        )}
-        
-        {(videoA || videoB) && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
-            <VideoCard video={videoA} engagement={engagementA} label="Video A" />
-            <VideoCard video={videoB} engagement={engagementB} label="Video B" />
-          </div>
-        )}
-        
-        {sessionId && videoA && videoB && (
-          <div className="mt-8">
-            <ChatWindow 
-              sessionId={sessionId}
-              videoAId={videoA.video_id}
-              videoBId={videoB.video_id}
-            />
-          </div>
-        )}
+        <AnimatePresence mode="wait">
+          {!sessionId ? (
+            <motion.div
+              key="input"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.5 }}
+            >
+              <VideoInputForm onSubmit={handleProcessVideos} loading={loading} />
+
+              {error && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="mt-6 p-4 bg-red-50 border border-red-200 rounded-xl text-red-700 flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-3">
+                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                    </svg>
+                    <span>{error}</span>
+                  </div>
+                  <button
+                    onClick={resetApp}
+                    className="text-red-600 hover:text-red-800 font-medium text-sm"
+                  >
+                    Try Again
+                  </button>
+                </motion.div>
+              )}
+            </motion.div>
+          ) : (
+            <motion.div
+              key="results"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.5 }}
+            >
+              {/* Video Comparison Header */}
+              <motion.div
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-6 flex justify-between items-center"
+              >
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">Video Analysis</h2>
+                  <p className="text-gray-600 mt-1">Comparing performance and engagement metrics</p>
+                </div>
+                <button
+                  onClick={resetApp}
+                  className="px-4 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg transition flex items-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  New Comparison
+                </button>
+              </motion.div>
+
+              {/* Side by Side Video Cards */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                <VideoCard video={videoA} engagement={engagementA} label="Video A" />
+                <VideoCard video={videoB} engagement={engagementB} label="Video B" />
+              </div>
+
+              {/* Chat Interface */}
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+              >
+                <ChatWindow
+                  sessionId={sessionId}
+                  videoAId={videoA.video_id}
+                  videoBId={videoB.video_id}
+                />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
+
+      {/* Loading Modal */}
+      <LoadingModal
+        isOpen={loading}
+        step={loadingStep}
+        progress={loadingProgress}
+      />
     </div>
   )
 }

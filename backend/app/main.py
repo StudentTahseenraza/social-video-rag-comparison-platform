@@ -27,17 +27,19 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.llm_service import llm_service
         await llm_service.initialize()
-        logger.info("LLM Service initialized successfully")
+        logger.info("✅ LLM Service initialized")
     except Exception as e:
-        logger.error(f"Failed to initialize LLM Service: {str(e)}")
+        logger.error(f"❌ LLM Service failed: {str(e)}")
     
     try:
         from app.services.vector_store import vector_store
         await vector_store.initialize()
-        logger.info("Vector Store initialized successfully")
+        logger.info("✅ Vector Store initialized")
+        stats = await vector_store.get_collection_stats()
+        logger.info(f"   Vector DB stats: {stats}")
     except Exception as e:
-        logger.warning(f"Vector Store initialization failed: {str(e)}")
-        logger.warning("Falling back to local ChromaDB")
+        logger.warning(f"⚠️ Vector Store initialization failed: {str(e)}")
+        logger.warning("   Continuing without vector DB...")
     
     yield
     
@@ -48,15 +50,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="RAG Video Chatbot API",
-    description="""
-    API for comparing YouTube and Instagram videos using RAG (Retrieval-Augmented Generation).
-    
-    Features:
-    - Extract video metadata and transcripts
-    - Calculate engagement rates
-    - RAG-powered chat with memory
-    - Streaming responses with source citations
-    """,
+    description="API for comparing YouTube and Instagram videos using RAG",
     version="1.0.0",
     lifespan=lifespan,
     docs_url="/docs",
@@ -69,6 +63,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:5173", 
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
         "https://*.vercel.app",
         "https://*.railway.app"
     ],
@@ -78,6 +74,7 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
+# Include router with /api/v1 prefix
 app.include_router(router, prefix="/api/v1")
 
 @app.get("/")
@@ -89,39 +86,6 @@ async def root():
         "docs": "/docs",
         "health": "/health"
     }
-# Add to lifespan startup section
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("=" * 50)
-    logger.info("Starting RAG Video Chatbot API v1.0.0")
-    logger.info(f"Environment: {settings.environment}")
-    
-    # Initialize services
-    try:
-        from app.services.llm_service import llm_service
-        await llm_service.initialize()
-        logger.info("✅ LLM Service initialized")
-    except Exception as e:
-        logger.error(f"❌ LLM Service failed: {str(e)}")
-    
-    try:
-        from app.services.vector_store import vector_store
-        await vector_store.initialize()
-        logger.info("✅ Vector Store initialized")
-        
-        # Log collection stats
-        stats = await vector_store.get_collection_stats()
-        logger.info(f"   Vector DB stats: {stats}")
-        
-    except Exception as e:
-        logger.warning(f"⚠️ Vector Store initialization failed: {str(e)}")
-        logger.warning("   Continuing without vector DB...")
-    
-    yield
-    
-    # Shutdown
-    logger.info("Shutting down...")
 
 @app.get("/health")
 async def health():
