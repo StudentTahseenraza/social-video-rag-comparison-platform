@@ -13,9 +13,17 @@ from app.models.schemas import (
 from app.services.youtube_service import YouTubeService
 from app.services.instagram_service import InstagramService
 from app.services.rag_service import rag_service
-from app.utils.helpers import generate_session_id
+from app.utils.helpers import generate_session_id, setup_logging
+from app.api.youtube_routes import router as youtube_router
+from app.api.instagram_routes import router as instagram_router
 
+logger = setup_logging()
 router = APIRouter()
+
+# Include sub-routers
+router.include_router(youtube_router)
+router.include_router(instagram_router)
+
 youtube_service = YouTubeService()
 instagram_service = InstagramService()
 
@@ -33,15 +41,19 @@ async def process_videos(
     """
     try:
         session_id = generate_session_id()
+        logger.info(f"Processing videos for session {session_id}")
         
         # Process YouTube video
+        logger.info(f"Processing YouTube: {request.youtube_url}")
         video_a = await youtube_service.process_video(request.youtube_url)
         
         # Process Instagram video
+        logger.info(f"Processing Instagram: {request.instagram_url}")
         video_b = await instagram_service.process_video(request.instagram_url)
         
         # Calculate engagement
         from app.models.schemas import EngagementMetrics
+        
         engagement_a = EngagementMetrics(
             video_id=video_a.video_id,
             views=video_a.views,
@@ -56,6 +68,10 @@ async def process_videos(
             comments=video_b.comments
         ).calculate_rate()
         
+        # Add messages for missing data
+        if video_b.views is None:
+            engagement_b.message = "Limited Instagram data available"
+        
         # Store in vector DB (background)
         background_tasks.add_task(
             rag_service.store_video_transcript,
@@ -63,6 +79,8 @@ async def process_videos(
             video_a,
             video_b
         )
+        
+        logger.info(f"Successfully processed both videos for session {session_id}")
         
         return ProcessVideosResponse(
             session_id=session_id,
@@ -73,6 +91,7 @@ async def process_videos(
         )
         
     except Exception as e:
+        logger.error(f"Failed to process videos: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/chat/stream")
@@ -91,6 +110,7 @@ async def chat_stream(request: ChatRequest):
                 yield f"data: {json.dumps(chunk)}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:
+            logger.error(f"Chat stream error: {str(e)}")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
     
     return StreamingResponse(

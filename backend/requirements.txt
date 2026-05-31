@@ -31,3 +31,7 @@ requests==2.31.0
 python-multipart==0.0.6
 tenacity==8.2.3
 aiofiles==23.2.1
+
+# Additional
+numpy==1.24.3
+ctranslate2==3.20.0
