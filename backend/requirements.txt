@@ -16,22 +16,24 @@ langchain==0.1.0
 langchain-google-genai==0.0.3
 langchain-community==0.0.10
 langchain-huggingface==0.0.2
+
+# Vector DB & Embeddings
 chromadb==0.4.22
 sentence-transformers==2.2.2
-
-# Vector DB (Qdrant)
 qdrant-client==1.7.0
 
 # Async & Cache
 redis==5.0.1
 celery==5.3.4
+aiofiles==23.2.1
 
 # Utils
 requests==2.31.0
 python-multipart==0.0.6
 tenacity==8.2.3
-aiofiles==23.2.1
-
-# Additional
 numpy==1.24.3
 ctranslate2==3.20.0
+
+# Additional ML
+torch==2.1.0
+transformers==4.36.0

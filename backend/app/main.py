@@ -89,6 +89,39 @@ async def root():
         "docs": "/docs",
         "health": "/health"
     }
+# Add to lifespan startup section
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("=" * 50)
+    logger.info("Starting RAG Video Chatbot API v1.0.0")
+    logger.info(f"Environment: {settings.environment}")
+    
+    # Initialize services
+    try:
+        from app.services.llm_service import llm_service
+        await llm_service.initialize()
+        logger.info("✅ LLM Service initialized")
+    except Exception as e:
+        logger.error(f"❌ LLM Service failed: {str(e)}")
+    
+    try:
+        from app.services.vector_store import vector_store
+        await vector_store.initialize()
+        logger.info("✅ Vector Store initialized")
+        
+        # Log collection stats
+        stats = await vector_store.get_collection_stats()
+        logger.info(f"   Vector DB stats: {stats}")
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Vector Store initialization failed: {str(e)}")
+        logger.warning("   Continuing without vector DB...")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down...")
 
 @app.get("/health")
 async def health():
