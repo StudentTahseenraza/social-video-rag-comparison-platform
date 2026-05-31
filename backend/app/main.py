@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import asyncio
@@ -15,42 +15,85 @@ logger = setup_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    logger.info("Starting RAG Chatbot API...")
+    logger.info("=" * 50)
+    logger.info("Starting RAG Video Chatbot API v1.0.0")
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"LLM Model: {settings.llm_model}")
+    logger.info(f"Embedding Model: {settings.embedding_model}")
+    logger.info(f"Chunk Size: {settings.chunk_size}")
+    logger.info("=" * 50)
     
     # Initialize services
-    from app.services.llm_service import llm_service
-    await llm_service.initialize()
+    try:
+        from app.services.llm_service import llm_service
+        await llm_service.initialize()
+        logger.info("LLM Service initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize LLM Service: {str(e)}")
+    
+    try:
+        from app.services.vector_store import vector_store
+        await vector_store.initialize()
+        logger.info("Vector Store initialized successfully")
+    except Exception as e:
+        logger.warning(f"Vector Store initialization failed: {str(e)}")
+        logger.warning("Falling back to local ChromaDB")
     
     yield
     
     # Shutdown
-    logger.info("Shutting down...")
+    logger.info("Shutting down RAG Chatbot API...")
     await rag_service.cleanup()
+    logger.info("Shutdown complete")
 
 app = FastAPI(
-    title="RAG Video Chatbot",
-    description="Chat with YouTube and Instagram videos using RAG",
+    title="RAG Video Chatbot API",
+    description="""
+    API for comparing YouTube and Instagram videos using RAG (Retrieval-Augmented Generation).
+    
+    Features:
+    - Extract video metadata and transcripts
+    - Calculate engagement rates
+    - RAG-powered chat with memory
+    - Streaming responses with source citations
+    """,
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
 # CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://*.vercel.app"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173", 
+        "https://*.vercel.app",
+        "https://*.railway.app"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
-app.include_router(router, prefix="/api")
+app.include_router(router, prefix="/api/v1")
 
 @app.get("/")
 async def root():
-    return {"message": "RAG Video Chatbot API", "status": "running"}
+    return {
+        "message": "RAG Video Chatbot API",
+        "version": "1.0.0",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/health"
+    }
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "environment": settings.environment}
+    return {
+        "status": "healthy",
+        "environment": settings.environment,
+        "timestamp": asyncio.get_event_loop().time()
+    }
