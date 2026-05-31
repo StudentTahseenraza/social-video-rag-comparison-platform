@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - REDIS_URL=redis://redis:6379
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend:/app
+      - /tmp/rag_chatbot:/tmp/rag_chatbot
+    depends_on:
+      - redis
+    networks:
+      - rag-network
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - rag-network
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - rag-network
+
+networks:
+  rag-network:
+    driver: bridge
