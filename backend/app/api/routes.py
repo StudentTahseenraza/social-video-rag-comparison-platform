@@ -158,85 +158,175 @@ async def chat_stream(request: ChatRequest):
             # Get session data
             session = rag_service.sessions.get(request.session_id)
             
-            if session:
-                video_a = session["video_a"]
-                video_b = session["video_b"]
+            if not session:
+                error_msg = "Session not found. Please process videos first."
+                for char in error_msg:
+                    yield f"data: {json.dumps({'content': char})}\n\n"
+                    await asyncio.sleep(0.03)
+                yield "data: [DONE]\n\n"
+                return
+            
+            video_a = session["video_a"]
+            video_b = session["video_b"]
+            
+            # SAFE function to format numbers (handles None)
+            def safe_format_number(value):
+                if value is None:
+                    return "N/A"
+                try:
+                    if isinstance(value, (int, float)):
+                        if value >= 1000000:
+                            return f"{value/1000000:.1f}M"
+                        if value >= 1000:
+                            return f"{value/1000:.1f}K"
+                        return f"{value:,}"
+                    return str(value)
+                except:
+                    return "N/A"
+            
+            # SAFE function to format percentage (handles None)
+            def safe_format_percent(value):
+                if value is None:
+                    return "N/A"
+                try:
+                    return f"{value:.2f}%"
+                except:
+                    return "N/A"
+            
+            # SAFE function to get engagement rate
+            def get_engagement(video):
+                if video.views and video.views > 0 and video.likes is not None and video.comments is not None:
+                    return ((video.likes + video.comments) / video.views) * 100
+                return None
+            
+            engagement_a = get_engagement(video_a)
+            engagement_b = get_engagement(video_b)
+            
+            question = request.message.lower()
+            
+            # Build response based on question
+            if "engagement" in question:
+                response = f"**📊 Engagement Rate Analysis**\n\n"
                 
-                # Calculate engagement for context
-                def calc_engagement(views, likes, comments):
-                    if views and views > 0:
-                        return ((likes or 0) + (comments or 0)) / views * 100
-                    return 0
+                # Video A
+                response += f"**Video A ({video_a.creator})**\n"
+                response += f"• Engagement Rate: {safe_format_percent(engagement_a)}\n"
+                response += f"• Views: {safe_format_number(video_a.views)}\n"
+                response += f"• Likes: {safe_format_number(video_a.likes)}\n"
+                response += f"• Comments: {safe_format_number(video_a.comments)}\n\n"
                 
-                engagement_a = calc_engagement(video_a.views, video_a.likes, video_a.comments)
-                engagement_b = calc_engagement(video_b.views, video_b.likes, video_b.comments)
+                # Video B
+                response += f"**Video B ({video_b.creator})**\n"
+                response += f"• Engagement Rate: {safe_format_percent(engagement_b)}\n"
+                response += f"• Views: {safe_format_number(video_b.views)}\n"
+                response += f"• Likes: {safe_format_number(video_b.likes)}\n"
+                response += f"• Comments: {safe_format_number(video_b.comments)}\n\n"
                 
-                # Generate response based on question
-                question = request.message.lower()
-                
-                if "engagement" in question:
-                    response = f"**Engagement Rate Analysis**\n\n"
-                    response += f"Video A: {engagement_a:.2f}% (Views: {video_a.views:,}, Likes: {video_a.likes:,}, Comments: {video_a.comments:,})\n\n"
-                    response += f"Video B: {engagement_b:.2f}% (Views: {video_b.views:,}, Likes: {video_b.likes:,}, Comments: {video_b.comments:,})\n\n"
-                    
+                # Comparison
+                if engagement_a is not None and engagement_b is not None:
                     if engagement_a > engagement_b:
                         diff = engagement_a - engagement_b
-                        response += f"📊 Video A has {diff:.2f}% higher engagement rate than Video B. This indicates better audience retention and content resonance."
+                        response += f"**🎯 Conclusion:** Video A has {diff:.2f}% higher engagement rate."
                     else:
                         diff = engagement_b - engagement_a
-                        response += f"📊 Video B has {diff:.2f}% higher engagement rate than Video A."
-                
-                elif "hook" in question:
-                    response = f"**Hook Comparison (First 5-10 seconds)**\n\n"
-                    response += f"**Video A Hook:**\n{video_a.transcript[:150]}...\n\n"
-                    response += f"**Video B Hook:**\n{video_b.transcript[:150]}...\n\n"
-                    response += "💡 **Analysis:** Video A's hook is more detailed and creates immediate curiosity, which typically leads to better viewer retention."
-                
-                elif "creator" in question or "who" in question:
-                    response = f"**Creator Information**\n\n"
-                    response += f"**Video A Creator:** {video_a.creator}\n"
-                    response += f"Followers: {video_a.creator_followers or 'Not available'}\n\n"
-                    response += f"**Video B Creator:** {video_b.creator}\n"
-                    response += f"Followers: {video_b.creator_followers:,}\n"
-                
-                elif "improvement" in question or "suggest" in question:
-                    response = f"**Improvement Suggestions for Video B**\n\n"
-                    response += f"1. **Strengthen the hook** - Video A's first 5 seconds creates immediate interest with '{video_a.transcript[:50]}...'\n"
-                    response += f"2. **Add clear call-to-action** - Encourage viewers to like and comment\n"
-                    response += f"3. **Optimize video length** - Keep content concise and value-packed\n"
-                    response += f"4. **Use pattern interrupts** - Keep viewers engaged throughout\n\n"
-                    response += f"Based on Video A's {engagement_a:.1f}% engagement rate, implementing these changes could significantly improve Video B's performance."
-                
+                        response += f"**🎯 Conclusion:** Video B has {diff:.2f}% higher engagement rate."
+                elif engagement_a is not None:
+                    response += f"**🎯 Conclusion:** Video A engagement: {engagement_a:.2f}% (Video B data insufficient)"
+                elif engagement_b is not None:
+                    response += f"**🎯 Conclusion:** Video B engagement: {engagement_b:.2f}% (Video A data insufficient)"
                 else:
-                    response = f"I've analyzed both videos. Here's what I found:\n\n"
-                    response += f"**Video A ({video_a.creator})** - {engagement_a:.1f}% engagement rate\n"
-                    response += f"**Video B ({video_b.creator})** - {engagement_b:.1f}% engagement rate\n\n"
-                    response += f"What specific aspect would you like me to compare? You can ask about:\n"
-                    response += f"- Engagement rates\n"
-                    response += f"- Hook comparison\n"
-                    response += f"- Creator information\n"
-                    response += f"- Improvement suggestions"
+                    response += f"**🎯 Conclusion:** Insufficient data to calculate engagement rates."
+            
+            elif "hook" in question or "first 5" in question:
+                hook_a = (video_a.transcript[:200] if video_a.transcript else "No transcript available")
+                hook_b = (video_b.transcript[:200] if video_b.transcript else "No transcript available")
                 
-                # Stream the response character by character
-                for char in response:
-                    yield f"data: {json.dumps({'content': char})}\n\n"
-                    await asyncio.sleep(0.02)
+                response = f"**🎬 Hook Analysis (First 5-10 seconds)**\n\n"
+                response += f"**Video A Hook:**\n\"{hook_a}...\"\n\n"
+                response += f"**Video B Hook:**\n\"{hook_b}...\"\n\n"
                 
-                yield f"data: {json.dumps({'citations': [{'source': 'Video A'}, {'source': 'Video B'}]})}\n\n"
+                if len(hook_a) > 100 and len(hook_b) < 100:
+                    response += f"**💡 Analysis:** Video A has a more detailed hook that likely captures attention better."
+                elif len(hook_b) > 100:
+                    response += f"**💡 Analysis:** Video B's hook is detailed and engaging."
+                else:
+                    response += f"**💡 Analysis:** Both hooks could be strengthened. Consider adding a compelling question or statement in the first 5 seconds."
+            
+            elif "creator" in question or "who is" in question:
+                response = f"**👤 Creator Information**\n\n"
+                response += f"**Video A Creator:** {video_a.creator}\n"
+                response += f"Platform: {video_a.platform.value.upper()}\n\n"
+                response += f"**Video B Creator:** {video_b.creator}\n"
+                response += f"Platform: {video_b.platform.value.upper()}\n"
+            
+            elif "improvement" in question or "suggest" in question:
+                response = f"**🚀 Improvement Suggestions**\n\n"
+                
+                if engagement_a is not None and engagement_b is not None and engagement_a > engagement_b:
+                    diff = engagement_a - engagement_b
+                    response += f"Based on Video A's {diff:.1f}% higher engagement rate:\n\n"
+                    response += f"**Suggestions for Video B:**\n"
+                    response += f"1. **Strengthen the hook** - Grab attention within first 5 seconds\n"
+                    response += f"2. **Add clear call-to-action** - Encourage likes and comments\n"
+                    response += f"3. **Improve value delivery** - Show benefits early\n"
+                    response += f"4. **Optimize length** - Keep content concise\n\n"
+                    response += f"**What works in Video A:**\n"
+                    if video_a.transcript:
+                        response += f"• {video_a.transcript[:100]}...\n"
+                else:
+                    response += f"**General improvements for both videos:**\n"
+                    response += f"1. Start with a compelling question or statement\n"
+                    response += f"2. Show value within first 10 seconds\n"
+                    response += f"3. End with a clear call-to-action\n"
+                    response += f"4. Use pattern interrupts to maintain attention\n"
             
             else:
-                # Fallback response if session not found
-                fallback = "I'm ready to analyze your videos. Please process the videos first by submitting URLs."
-                for char in fallback:
-                    yield f"data: {json.dumps({'content': char})}\n\n"
-                    await asyncio.sleep(0.02)
+                # General analysis
+                response = f"**📹 Video Analysis Summary**\n\n"
+                response += f"**Video A ({video_a.creator})**\n"
+                response += f"• Platform: {video_a.platform.value.upper()}\n"
+                response += f"• Views: {safe_format_number(video_a.views)}\n"
+                if engagement_a:
+                    response += f"• Engagement: {engagement_a:.2f}%\n"
+                response += f"• Hashtags: {', '.join(video_a.hashtags[:3]) if video_a.hashtags else 'None'}\n\n"
+                
+                response += f"**Video B ({video_b.creator})**\n"
+                response += f"• Platform: {video_b.platform.value.upper()}\n"
+                response += f"• Views: {safe_format_number(video_b.views)}\n"
+                if engagement_b:
+                    response += f"• Engagement: {engagement_b:.2f}%\n"
+                response += f"• Hashtags: {', '.join(video_b.hashtags[:3]) if video_b.hashtags else 'None'}\n\n"
+                
+                response += f"**What would you like to know more about?**\n"
+                response += f"• Engagement rates comparison\n"
+                response += f"• Hook analysis\n"
+                response += f"• Improvement suggestions\n"
+                response += f"• Creator information"
+            
+            # Stream the response
+            for char in response:
+                yield f"data: {json.dumps({'content': char})}\n\n"
+                await asyncio.sleep(0.015)
+            
+            # Add citations
+            citations = []
+            if video_a.transcript:
+                citations.append({"source": f"Video A ({video_a.platform.value})", "preview": video_a.transcript[:100]})
+            if video_b.transcript:
+                citations.append({"source": f"Video B ({video_b.platform.value})", "preview": video_b.transcript[:100]})
+            
+            if citations:
+                yield f"data: {json.dumps({'citations': citations})}\n\n"
             
             yield "data: [DONE]\n\n"
             
         except Exception as e:
             logger.error(f"Chat stream error: {str(e)}")
             error_msg = f"Error: {str(e)}"
-            yield f"data: {json.dumps({'error': error_msg})}\n\n"
+            for char in error_msg:
+                yield f"data: {json.dumps({'error': char})}\n\n"
+                await asyncio.sleep(0.03)
+            yield "data: [DONE]\n\n"
     
     return StreamingResponse(
         generate(),
@@ -247,7 +337,6 @@ async def chat_stream(request: ChatRequest):
             "X-Accel-Buffering": "no"
         }
     )
-
 
 @router.get("/session/{session_id}/history")
 async def get_session_history(session_id: str):
