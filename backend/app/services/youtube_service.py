@@ -123,18 +123,13 @@ class YouTubeService:
         try:
             def sync_get_transcript():
                 try:
-                    transcript_list = YouTubeTranscriptApi.get_transcript(
-                        video_id, 
-                        languages=['en', 'en-US', 'en-GB']
-                    )
-                    # Combine all text entries
+                    from youtube_transcript_api import YouTubeTranscriptApi
+                    # Correct method - get_transcript is a function, not class method
+                    transcript_list = YouTubeTranscriptApi().get_transcript(video_id, languages=['en'])
                     full_text = ' '.join([entry['text'] for entry in transcript_list])
                     return full_text
-                except (TranscriptsDisabled, NoTranscriptFound, VideoUnavailable) as e:
-                    logger.warning(f"Transcript error for {video_id}: {str(e)}")
-                    return None
                 except Exception as e:
-                    logger.error(f"Unexpected transcript error for {video_id}: {str(e)}")
+                    logger.warning(f"Transcript error for {video_id}: {str(e)}")
                     return None
             
             return await asyncio.to_thread(sync_get_transcript)

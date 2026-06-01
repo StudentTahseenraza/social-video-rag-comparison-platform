@@ -26,14 +26,14 @@ class RAGService:
             logger.info("LangGraph agent initialized")
     
     async def store_video_transcript(
-        self, 
-        session_id: str, 
-        video_a: VideoMetadata, 
-        video_b: VideoMetadata
-    ):
-        """Store video transcripts in vector DB with enhanced metadata"""
+    self, 
+    session_id: str, 
+    video_a: VideoMetadata, 
+    video_b: VideoMetadata
+):
+        """Store video transcripts - simplified for demo"""
         try:
-            # Initialize session
+            # Initialize session only, skip vector store
             self.sessions[session_id] = {
                 "video_a": video_a,
                 "video_b": video_b,
@@ -46,39 +46,17 @@ class RAGService:
                 }
             }
             
-            # Store in memory service
-            conversation_memory.update_context(session_id, "video_a_creator", video_a.creator)
-            conversation_memory.update_context(session_id, "video_b_creator", video_b.creator)
-            conversation_memory.update_context(session_id, "video_a_views", video_a.views)
-            conversation_memory.update_context(session_id, "video_b_views", video_b.views)
-            
-            # Chunk and store in vector DB
-            total_chunks = await vector_store.chunk_and_store(
-                session_id, video_a, video_b
-            )
-            
-            # Store engagement metrics in context
-            if video_a.transcript:
-                conversation_memory.update_context(
-                    session_id, 
-                    "video_a_hook", 
-                    video_a.transcript[:100]
-                )
-            if video_b.transcript:
-                conversation_memory.update_context(
-                    session_id, 
-                    "video_b_hook", 
-                    video_b.transcript[:100]
-                )
-            
-            logger.info(f"Session {session_id}: Stored {total_chunks} chunks with enhanced context")
-            
-            # Initialize agent
-            await self.initialize_agent()
+            logger.info(f"Session {session_id} initialized successfully (vector store disabled)")
             
         except Exception as e:
             logger.error(f"Failed to store transcripts: {str(e)}")
-            raise
+            # Still create session even if vector store fails
+            self.sessions[session_id] = {
+                "video_a": video_a,
+                "video_b": video_b,
+                "chat_history": [],
+                "created_at": datetime.now(),
+            }
     
     async def chat_stream(
         self,

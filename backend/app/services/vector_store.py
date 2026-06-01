@@ -82,32 +82,57 @@ class VectorStore:
         
         return total_chunks
     
-    async def _chunk_transcript(
-        self, 
-        video: VideoMetadata, 
-        label: str
-    ) -> List[Dict[str, Any]]:
-        """Split transcript into overlapping chunks with metadata"""
+    async def _chunk_transcript(self, video: VideoMetadata, label: str) -> List[Dict[str, Any]]:
+        """Split transcript into overlapping chunks without langchain"""
         if not video.transcript:
             return []
         
-        # Use recursive chunking for better context
-        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        # Simple chunking without langchain
+        chunk_size = 500
+        chunk_overlap = 50
         
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50,
-            length_function=len,
-            separators=["\n\n", "\n", ". ", " ", ""]
-        )
+        text = video.transcript
+        chunks = []
         
-        chunks = text_splitter.split_text(video.transcript)
+        # Split by sentences first
+        sentences = text.replace('. ', '.\n').replace('! ', '!\n').replace('? ', '?\n').split('\n')
         
-        # Create chunk objects with metadata
+        current_chunk = ""
+        current_length = 0
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+                
+            sentence_length = len(sentence)
+            
+            if current_length + sentence_length <= chunk_size:
+                current_chunk += sentence + " "
+                current_length += sentence_length
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                
+                # Start new chunk with overlap
+                if current_chunk and chunk_overlap > 0:
+                    # Take last 50 chars as overlap
+                    words = current_chunk.split()
+                    overlap_text = " ".join(words[-10:]) if len(words) > 10 else current_chunk
+                    current_chunk = overlap_text + " " + sentence + " "
+                    current_length = len(overlap_text) + sentence_length
+                else:
+                    current_chunk = sentence + " "
+                    current_length = sentence_length
+        
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        
+        # Create chunk objects
         chunk_objects = []
         for i, chunk_text in enumerate(chunks):
-            chunk = {
-                "chunk_id": f"{video.video_id}_{i}_{uuid.uuid4().hex[:4]}",
+            chunk_objects.append({
+                "chunk_id": f"{video.video_id}_{i}",
                 "video_id": video.video_id,
                 "label": label,
                 "text": chunk_text,
@@ -120,13 +145,9 @@ class VectorStore:
                     "views": video.views,
                     "likes": video.likes,
                     "comments": video.comments,
-                    "engagement_rate": self._calculate_engagement(video),
                     "hashtags": video.hashtags[:5],
-                    "upload_date": str(video.upload_date) if video.upload_date else None,
-                    "duration": video.duration
                 }
-            }
-            chunk_objects.append(chunk)
+            })
         
         return chunk_objects
     
