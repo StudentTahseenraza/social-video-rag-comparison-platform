@@ -1,11 +1,12 @@
 import yt_dlp
 import requests
-from app.models.schemas import VideoMetadata, VideoPlatform
-from app.utils.helpers import extract_video_id, setup_logging
+import json
+import re
 import asyncio
 from typing import Optional, Dict, Any
 from datetime import datetime
-import re
+from app.models.schemas import VideoMetadata, VideoPlatform
+from app.utils.helpers import extract_video_id, setup_logging
 
 logger = setup_logging()
 
@@ -20,20 +21,22 @@ class YouTubeService:
         }
     
     async def process_video(self, url: str) -> VideoMetadata:
-        """Extract metadata and transcript from YouTube video"""
         video_id = extract_video_id(url, 'youtube')
         logger.info(f"Processing YouTube video: {video_id}")
         
-        # Extract metadata
         metadata = await self._extract_metadata(url)
         
         if not metadata:
             raise ValueError(f"Failed to extract metadata for YouTube video: {url}")
         
-        # Get transcript using working method
+        # Get transcript - CRITICAL FIX
         transcript = await self._get_transcript_working(video_id)
         
-        # Parse upload date
+        if transcript:
+            logger.info(f"✅ Got transcript for {video_id}: {len(transcript)} characters")
+        else:
+            logger.warning(f"❌ No transcript for {video_id}")
+        
         upload_date = None
         if metadata.get('upload_date'):
             try:
@@ -41,13 +44,10 @@ class YouTubeService:
             except:
                 pass
         
-        # Extract hashtags
-        description = metadata.get('description', '')
-        hashtags = self._extract_hashtags(description)
-        
+        hashtags = self._extract_hashtags(metadata.get('description', ''))
         creator = metadata.get('channel') or metadata.get('uploader') or 'Unknown Creator'
         
-        video_metadata = VideoMetadata(
+        return VideoMetadata(
             video_id=video_id,
             platform=VideoPlatform.YOUTUBE,
             url=url,
@@ -63,12 +63,9 @@ class YouTubeService:
             thumbnail_url=metadata.get('thumbnail'),
             transcript=transcript
         )
-        
-        logger.info(f"Successfully processed YouTube video: {video_id} - Transcript: {len(transcript) if transcript else 0} chars")
-        return video_metadata
     
     async def _get_transcript_working(self, video_id: str) -> Optional[str]:
-        """WORKING METHOD: Extract transcript using yt-dlp"""
+        """Get transcript using yt-dlp with proper caption extraction"""
         
         def sync_extract():
             try:
@@ -80,76 +77,71 @@ class YouTubeService:
                     'writesubtitles': True,
                     'writeautomaticsub': True,
                     'subtitlesformat': 'json3',
-                    'subtitleslangs': ['en'],
                 }
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
                     
-                    # Try automatic captions first
-                    if 'automatic_captions' in info and 'en' in info['automatic_captions']:
-                        captions = info['automatic_captions']['en']
-                        if captions:
-                            caption_url = captions[0]['url']
-                            response = requests.get(caption_url)
-                            
-                            if response.status_code == 200:
-                                data = response.json()
-                                
-                                if 'events' in data:
-                                    text_parts = []
-                                    for event in data['events']:
-                                        if 'segs' in event:
-                                            for seg in event['segs']:
-                                                if 'utf8' in seg:
-                                                    text_parts.append(seg['utf8'])
-                                    
-                                    transcript = ' '.join(text_parts)
-                                    if transcript:
-                                        logger.info(f"Got automatic captions for {video_id}: {len(transcript)} chars")
-                                        return transcript
-                    
-                    # Try regular subtitles
-                    if 'subtitles' in info and 'en' in info['subtitles']:
-                        subtitles = info['subtitles']['en']
-                        if subtitles:
-                            caption_url = subtitles[0]['url']
-                            response = requests.get(caption_url)
-                            
-                            if response.status_code == 200:
-                                if caption_url.endswith('.json'):
-                                    data = response.json()
-                                    if 'events' in data:
+                    # Try automatic captions
+                    if 'automatic_captions' in info:
+                        for lang in ['en', 'en-US', 'en-GB']:
+                            if lang in info['automatic_captions']:
+                                captions = info['automatic_captions'][lang]
+                                if captions:
+                                    caption_url = captions[0]['url']
+                                    response = requests.get(caption_url, timeout=30)
+                                    if response.status_code == 200:
+                                        data = response.json()
                                         text_parts = []
-                                        for event in data['events']:
-                                            if 'segs' in event:
-                                                for seg in event['segs']:
-                                                    if 'utf8' in seg:
-                                                        text_parts.append(seg['utf8'])
-                                        
-                                        transcript = ' '.join(text_parts)
-                                        if transcript:
-                                            logger.info(f"Got regular subtitles for {video_id}: {len(transcript)} chars")
+                                        if 'events' in data:
+                                            for event in data['events']:
+                                                if 'segs' in event:
+                                                    for seg in event['segs']:
+                                                        if 'utf8' in seg:
+                                                            text_parts.append(seg['utf8'])
+                                        if text_parts:
+                                            transcript = ' '.join(text_parts)
+                                            logger.info(f"Got captions from automatic: {len(transcript)} chars")
                                             return transcript
                     
-                    logger.warning(f"No captions found for {video_id}")
+                    # Try manual subtitles
+                    if 'subtitles' in info:
+                        for lang in ['en', 'en-US', 'en-GB']:
+                            if lang in info['subtitles']:
+                                subs = info['subtitles'][lang]
+                                if subs:
+                                    sub_url = subs[0]['url']
+                                    response = requests.get(sub_url, timeout=30)
+                                    if response.status_code == 200:
+                                        if sub_url.endswith('.json'):
+                                            data = response.json()
+                                            text_parts = []
+                                            if 'events' in data:
+                                                for event in data['events']:
+                                                    if 'segs' in event:
+                                                        for seg in event['segs']:
+                                                            if 'utf8' in seg:
+                                                                text_parts.append(seg['utf8'])
+                                            if text_parts:
+                                                transcript = ' '.join(text_parts)
+                                                logger.info(f"Got captions from manual: {len(transcript)} chars")
+                                                return transcript
+                    
                     return None
                     
             except Exception as e:
-                logger.error(f"Transcript extraction error: {str(e)}")
+                logger.error(f"Transcript extraction error: {e}")
                 return None
         
         return await asyncio.to_thread(sync_extract)
     
     async def _extract_metadata(self, url: str) -> Dict[str, Any]:
-        """Extract metadata using yt-dlp"""
         def sync_extract():
             try:
                 with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
-                    if info is None:
+                    if not info:
                         return {}
-                    
                     return {
                         'title': info.get('title'),
                         'uploader': info.get('uploader'),
@@ -163,7 +155,7 @@ class YouTubeService:
                         'thumbnail': info.get('thumbnail'),
                     }
             except Exception as e:
-                logger.error(f"Error extracting metadata: {str(e)}")
+                logger.error(f"Metadata error: {e}")
                 return {}
         
         return await asyncio.to_thread(sync_extract)

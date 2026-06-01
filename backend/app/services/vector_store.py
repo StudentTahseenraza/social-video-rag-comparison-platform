@@ -1,203 +1,187 @@
-import asyncio
-import uuid
 from typing import List, Dict, Any, Optional
-from datetime import datetime
 from app.utils.helpers import setup_logging
-from app.models.schemas import VideoMetadata
+import re
 
 logger = setup_logging()
 
 class VectorStore:
-    """Professional vector store with ChromaDB and BGE embeddings"""
+    """In-memory vector store with proper chunking (3-5 chunks per video)"""
     
     def __init__(self):
-        self.collection = None
-        self.is_initialized = False
-        self.chroma_client = None
+        self.transcripts = {}  # Stores chunks, not full transcripts
+        self.is_initialized = True
+        logger.info("Vector store initialized with chunking support")
     
     async def initialize(self):
-        """Initialize ChromaDB with BGE embeddings"""
-        try:
-            import chromadb
-            from chromadb.utils import embedding_functions
-            
-            # Initialize ChromaDB client
-            self.chroma_client = chromadb.PersistentClient(path="./chroma_db")
-            
-            # Use BGE embeddings
-            self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-                model_name="BAAI/bge-small-en-v1.5"
-            )
-            
-            # Get or create collection
-            try:
-                self.collection = self.chroma_client.get_collection(
-                    name="video_transcripts",
-                    embedding_function=self.embedding_function
-                )
-                logger.info("Loaded existing ChromaDB collection")
-            except:
-                self.collection = self.chroma_client.create_collection(
-                    name="video_transcripts",
-                    embedding_function=self.embedding_function,
-                    metadata={"hnsw:space": "cosine"}
-                )
-                logger.info("Created new ChromaDB collection")
-            
-            self.is_initialized = True
-            logger.info("Vector store initialized successfully")
-            
-        except Exception as e:
-            logger.error(f"Vector store initialization failed: {str(e)}")
-            self.is_initialized = False
-            raise
+        logger.info("Using vector store with 3-5 chunks per video")
+        self.is_initialized = True
     
-    async def chunk_and_store(self, session_id: str, video_a: VideoMetadata, video_b: VideoMetadata) -> int:
-        """Chunk transcripts and store in vector database"""
-        if not self.is_initialized:
-            await self.initialize()
-        
-        total_chunks = 0
-        
-        # Process Video A
-        if video_a.transcript:
-            chunks_a = self._chunk_transcript(video_a.transcript, video_a.video_id, "A", video_a)
-            if chunks_a:
-                await self._store_chunks(session_id, chunks_a)
-                total_chunks += len(chunks_a)
-                logger.info(f"Stored {len(chunks_a)} chunks for Video A")
-        
-        # Process Video B
-        if video_b.transcript:
-            chunks_b = self._chunk_transcript(video_b.transcript, video_b.video_id, "B", video_b)
-            if chunks_b:
-                await self._store_chunks(session_id, chunks_b)
-                total_chunks += len(chunks_b)
-                logger.info(f"Stored {len(chunks_b)} chunks for Video B")
-        
-        return total_chunks
-    
-    def _chunk_transcript(self, transcript: str, video_id: str, label: str, video: VideoMetadata) -> List[Dict[str, Any]]:
-        """Split transcript into overlapping chunks"""
-        if not transcript:
+    def chunk_text(self, text: str, target_chunks: int = 4) -> List[str]:
+        """
+        Split text into 3-5 meaningful chunks.
+        Uses semantic boundaries (sentences, paragraphs) for better chunks.
+        """
+        if not text:
             return []
         
-        chunk_size = 500
-        chunk_overlap = 50
+        # For short texts, return as single chunk
+        if len(text) < 300:
+            return [text]
         
-        # Split into chunks
+        # Split into sentences
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        if len(sentences) <= target_chunks:
+            return sentences
+        
+        # Calculate chunk size
+        chunk_size = max(1, len(sentences) // target_chunks)
+        
         chunks = []
-        start = 0
-        text_length = len(transcript)
+        for i in range(0, len(sentences), chunk_size):
+            chunk = " ".join(sentences[i:i + chunk_size])
+            if chunk:
+                chunks.append(chunk)
+            if len(chunks) >= 5:  # Max 5 chunks
+                break
         
-        while start < text_length:
-            end = min(start + chunk_size, text_length)
-            
-            # Try to end at a sentence boundary
-            if end < text_length:
-                last_period = transcript.rfind('.', start, end)
-                last_exclamation = transcript.rfind('!', start, end)
-                last_question = transcript.rfind('?', start, end)
-                last_boundary = max(last_period, last_exclamation, last_question)
-                if last_boundary > start:
-                    end = last_boundary + 1
-            
-            chunk_text = transcript[start:end].strip()
-            if chunk_text:
-                chunks.append({
-                    "chunk_id": f"{video_id}_{len(chunks)}",
-                    "video_id": video_id,
-                    "label": label,
-                    "text": chunk_text,
-                    "chunk_index": len(chunks),
-                    "metadata": {
-                        "creator": video.creator,
-                        "title": video.title[:100],
-                        "platform": video.platform.value,
-                        "views": video.views or 0,
-                        "likes": video.likes or 0,
-                        "comments": video.comments or 0,
-                        "hashtags": ",".join(video.hashtags[:5]),
-                        "duration": video.duration or 0
-                    }
-                })
-            
-            start = end - chunk_overlap if end < text_length else text_length
+        # Ensure we have at least 3 chunks for long texts
+        if len(chunks) < 3 and len(text) > 1000:
+            # Create overlapping chunks as fallback
+            words = text.split()
+            word_chunk_size = len(words) // 4
+            for i in range(0, len(words), word_chunk_size):
+                chunk = " ".join(words[i:i + word_chunk_size])
+                if chunk and chunk not in chunks:
+                    chunks.append(chunk)
+                if len(chunks) >= 5:
+                    break
         
-        return chunks
+        logger.info(f"Created {len(chunks)} chunks from {len(text)} chars")
+        return chunks[:5]  # Max 5 chunks
     
-    async def _store_chunks(self, session_id: str, chunks: List[Dict[str, Any]]):
-        """Store chunks in ChromaDB"""
-        if not chunks:
-            return
+    def store_video_chunks_sync(self, session_id: str, video_id: str, label: str, 
+                                  transcript: str, metadata: Dict[str, Any]) -> int:
+        """Store video transcript as multiple chunks (3-5 chunks)"""
+        if not transcript:
+            return 0
         
         try:
-            ids = [chunk["chunk_id"] for chunk in chunks]
-            documents = [chunk["text"] for chunk in chunks]
-            metadatas = [
-                {
-                    "session_id": session_id,
-                    "video_id": chunk["video_id"],
-                    "label": chunk["label"],
-                    "chunk_index": chunk["chunk_index"],
-                    "creator": chunk["metadata"]["creator"],
-                    "platform": chunk["metadata"]["platform"],
-                    "views": chunk["metadata"]["views"],
-                    "likes": chunk["metadata"]["likes"],
-                    "comments": chunk["metadata"]["comments"],
-                    "hashtags": chunk["metadata"]["hashtags"]
-                }
-                for chunk in chunks
+            # Clean transcript
+            clean_text = re.sub(r'[^\w\s\.\!\,\?\'\"]', ' ', transcript)
+            clean_text = ' '.join(clean_text.split())
+            
+            # Create chunks (3-5 chunks per video)
+            chunks = self.chunk_text(clean_text, target_chunks=4)
+            
+            # Initialize session dict if not exists
+            if session_id not in self.transcripts:
+                self.transcripts[session_id] = []
+            
+            # Remove existing entries for this video
+            self.transcripts[session_id] = [
+                t for t in self.transcripts[session_id] 
+                if t.get("video_id") != video_id
             ]
             
-            self.collection.add(
-                ids=ids,
-                documents=documents,
-                metadatas=metadatas
-            )
+            # Store each chunk separately
+            for i, chunk_text in enumerate(chunks):
+                self.transcripts[session_id].append({
+                    "id": f"{video_id}_chunk_{i}",
+                    "text": chunk_text,
+                    "video_id": video_id,
+                    "label": label,
+                    "chunk_index": i,
+                    "total_chunks": len(chunks),
+                    "metadata": metadata
+                })
+            
+            logger.info(f"Stored {len(chunks)} chunks for {video_id} (was {len(transcript)} chars)")
+            return len(chunks)
             
         except Exception as e:
-            logger.error(f"Failed to store chunks: {str(e)}")
+            logger.error(f"Error storing transcript chunks: {e}")
+            return 0
     
-    async def retrieve_relevant_chunks(self, query: str, session_id: str, video_a_id: str, video_b_id: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        """Retrieve relevant chunks for a query"""
-        if not self.is_initialized:
-            await self.initialize()
+    async def store_video_chunks(self, session_id: str, video_id: str, label: str, 
+                                  transcript: str, metadata: Dict[str, Any]) -> int:
+        """Async wrapper"""
+        return self.store_video_chunks_sync(session_id, video_id, label, transcript, metadata)
+    
+    async def search(self, query: str, session_id: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """Search for relevant chunks across all chunks"""
+        if session_id not in self.transcripts:
+            logger.warning(f"Session {session_id} not found")
+            return []
         
         try:
-            results = self.collection.query(
-                query_texts=[query],
-                n_results=top_k,
-                where={
-                    "$and": [
-                        {"session_id": session_id},
-                        {"video_id": {"$in": [video_a_id, video_b_id]}}
-                    ]
-                }
-            )
+            query_lower = query.lower()
+            results = []
             
-            chunks = []
-            if results['ids'] and results['ids'][0]:
-                for i, chunk_id in enumerate(results['ids'][0]):
-                    chunks.append({
-                        "chunk_id": chunk_id,
-                        "text": results['documents'][0][i],
-                        "video_id": results['metadatas'][0][i]['video_id'],
-                        "label": results['metadatas'][0][i]['label'],
-                        "relevance_score": 1 - results['distances'][0][i] if results.get('distances') else 1.0
+            for chunk in self.transcripts[session_id]:
+                text_lower = chunk["text"].lower()
+                
+                # Calculate relevance score
+                score = 0
+                
+                # Exact phrase match (highest score)
+                if query_lower in text_lower:
+                    score += 10
+                
+                # Word matches
+                words = query_lower.split()
+                for word in words:
+                    if len(word) > 2 and word in text_lower:
+                        score += 1
+                
+                # Bonus for chunk position (early chunks might be more important)
+                chunk_idx = chunk.get("chunk_index", 0)
+                if chunk_idx == 0:
+                    score += 2  # First chunk (hook) gets bonus
+                
+                if score > 0:
+                    results.append({
+                        "text": chunk["text"],
+                        "video_id": chunk["video_id"],
+                        "label": chunk["label"],
+                        "chunk_index": chunk.get("chunk_index", 0),
+                        "total_chunks": chunk.get("total_chunks", 1),
+                        "relevance": min(score / 10, 1.0)
                     })
             
-            return chunks
+            # Sort by relevance
+            results.sort(key=lambda x: x["relevance"], reverse=True)
+            
+            logger.info(f"Found {len(results)} relevant chunks for: '{query[:50]}'")
+            return results[:top_k]
             
         except Exception as e:
-            logger.error(f"Failed to retrieve chunks: {str(e)}")
+            logger.error(f"Search error: {e}")
             return []
+    
+    async def get_chunks_for_video(self, session_id: str, video_id: str) -> List[Dict[str, Any]]:
+        """Get all chunks for a specific video"""
+        if session_id not in self.transcripts:
+            return []
+        
+        return [c for c in self.transcripts[session_id] if c.get("video_id") == video_id]
     
     async def get_collection_stats(self) -> Dict[str, Any]:
         try:
-            count = self.collection.count()
-            return {"total_chunks": count, "is_initialized": self.is_initialized}
-        except:
-            return {"total_chunks": 0, "is_initialized": False}
+            total_chunks = sum(len(t) for t in self.transcripts.values()) if self.transcripts else 0
+            videos = set()
+            for chunks in self.transcripts.values():
+                for chunk in chunks:
+                    videos.add(chunk.get("video_id", ""))
+            
+            return {
+                "total_chunks": total_chunks,
+                "total_videos": len(videos),
+                "initialized": True
+            }
+        except Exception as e:
+            logger.error(f"Stats error: {e}")
+            return {"total_chunks": 0, "initialized": True}
 
 vector_store = VectorStore()

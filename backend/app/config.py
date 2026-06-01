@@ -1,34 +1,28 @@
-from pydantic_settings import BaseSettings
-from typing import Optional
+import os
+from dotenv import load_dotenv
 
-class Settings(BaseSettings):
-    # API Keys
-    google_api_key: str
-    qdrant_url: Optional[str] = None
-    qdrant_api_key: Optional[str] = None
-    youtube_api_key: Optional[str] = None
-    redis_url: str = "redis://localhost:6379"
+load_dotenv()
+
+class Settings:
+    # OpenRouter API
+    openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
     
     # App Settings
-    environment: str = "development"
-    debug: bool = True
+    environment: str = os.getenv("ENVIRONMENT", "development")
+    debug: bool = os.getenv("DEBUG", "True").lower() == "true"
     
     # RAG Settings
-    chunk_size: int = 500
-    chunk_overlap: int = 50
-    embedding_model: str = "BAAI/bge-small-en-v1.5"
-    top_k_results: int = 5
+    chunk_size: int = int(os.getenv("CHUNK_SIZE", "500"))
+    chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "50"))
+    embedding_model: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    top_k_results: int = int(os.getenv("TOP_K_RESULTS", "5"))
     
     # LLM Settings
-    llm_model: str = "gemini-1.5-flash"
-    temperature: float = 0.7
+    llm_model: str = os.getenv("LLM_MODEL", "openai/gpt-3.5-turbo")
+    temperature: float = float(os.getenv("TEMPERATURE", "0.7"))
     
     # Video Processing
-    max_video_size_mb: int = 100
-    temp_dir: str = "/tmp/rag_chatbot"
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    max_video_size_mb: int = int(os.getenv("MAX_VIDEO_SIZE_MB", "100"))
+    temp_dir: str = os.getenv("TEMP_DIR", "/tmp/rag_chatbot")
 
 settings = Settings()

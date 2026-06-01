@@ -3,21 +3,21 @@ from fastapi.responses import StreamingResponse
 from typing import Dict
 import json
 import asyncio
-from app.services.query_handlers import query_handlers
+from langchain_core.messages import HumanMessage
 
 from app.models.schemas import (
     ProcessVideosRequest, 
     ProcessVideosResponse,
-    ChatRequest,
-    ChatMessage
+    ChatRequest
 )
 from app.services.youtube_service import YouTubeService
 from app.services.instagram_service import InstagramService
 from app.services.rag_service import rag_service
+from app.services.llm_service import llm_service
+from app.services.vector_store import vector_store
 from app.utils.helpers import generate_session_id, setup_logging
 from app.api.youtube_routes import router as youtube_router
 from app.api.instagram_routes import router as instagram_router
-from app.services.memory_service import conversation_memory
 
 logger = setup_logging()
 router = APIRouter()
@@ -34,70 +34,26 @@ async def process_videos(
     request: ProcessVideosRequest,
     background_tasks: BackgroundTasks
 ):
-    """
-    Process YouTube and Instagram videos with fallback to mock data
-    """
+    """Process YouTube and Instagram videos in real-time - NO FALLBACKS"""
     try:
         session_id = generate_session_id()
         logger.info(f"Processing videos for session {session_id}")
         
-        from app.models.schemas import VideoMetadata, VideoPlatform, EngagementMetrics
-        from datetime import datetime
+        # Process YouTube video - real data only
+        logger.info(f"Processing YouTube: {request.youtube_url}")
+        video_a = await youtube_service.process_video(request.youtube_url)
         
-        # Process YouTube video with fallback
-        video_a = None
-        try:
-            logger.info(f"Processing YouTube: {request.youtube_url}")
-            video_a = await youtube_service.process_video(request.youtube_url)
-        except Exception as e:
-            logger.error(f"YouTube processing failed: {str(e)}")
-            # Return mock data for demo
-            video_a = VideoMetadata(
-                video_id="youtube_mock_001",
-                platform=VideoPlatform.YOUTUBE,
-                url=request.youtube_url,
-                title="Sample YouTube Video - Amazing Content!",
-                creator="Tech Creator",
-                creator_followers=None,
-                views=150000,
-                likes=12000,
-                comments=450,
-                hashtags=["tech", "tutorial", "viral"],
-                upload_date=datetime.now(),
-                duration=125,
-                thumbnail_url="https://via.placeholder.com/480x360",
-                transcript="In this video I'm going to show you the top 5 strategies to grow your channel. First, create compelling hooks in the first 5 seconds. Second, maintain viewer retention with pattern interrupts. Third, end with a strong call to action. These strategies have helped me reach 1 million subscribers. The hook is crucial - you need to grab attention immediately. Then deliver value quickly. Finally, ask for engagement."
-            )
-        
-        # Process Instagram video with fallback
-        video_b = None
-        try:
-            logger.info(f"Processing Instagram: {request.instagram_url}")
-            video_b = await instagram_service.process_video(request.instagram_url)
-        except Exception as e:
-            logger.error(f"Instagram processing failed: {str(e)}")
-            video_b = VideoMetadata(
-                video_id="instagram_mock_002",
-                platform=VideoPlatform.INSTAGRAM,
-                url=request.instagram_url,
-                title="Sample Instagram Reel - Quick Tips",
-                creator="Social Media Expert",
-                creator_followers=25000,
-                views=50000,
-                likes=3000,
-                comments=120,
-                hashtags=["instagram", "tips", "reels"],
-                upload_date=datetime.now(),
-                duration=30,
-                thumbnail_url="https://via.placeholder.com/480x360",
-                transcript="Quick tips for social media growth. Post consistently. Engage with your audience. Use trending audio for more reach. That's how you grow on Instagram! The hook needs to stop the scroll. Keep content under 30 seconds for better retention."
-            )
+        # Process Instagram video - real data only
+        logger.info(f"Processing Instagram: {request.instagram_url}")
+        video_b = await instagram_service.process_video(request.instagram_url)
         
         # Calculate engagement
+        from app.models.schemas import EngagementMetrics
+        
         def calc_engagement(views, likes, comments):
-            if views and views > 0:
-                return ((likes or 0) + (comments or 0)) / views * 100
-            return 0
+            if views and views > 0 and likes is not None and comments is not None:
+                return ((likes + comments) / views) * 100
+            return None
         
         engagement_a = EngagementMetrics(
             video_id=video_a.video_id,
@@ -115,21 +71,17 @@ async def process_videos(
             engagement_rate=calc_engagement(video_b.views, video_b.likes, video_b.comments)
         )
         
-        # Store in vector DB (background)
-        try:
-            background_tasks.add_task(
-                rag_service.store_video_transcript,
-                session_id,
-                video_a,
-                video_b
-            )
-        except Exception as e:
-            logger.warning(f"Vector store failed: {str(e)}")
+        # Store in vector DB
+        background_tasks.add_task(
+            rag_service.store_video_transcript,
+            session_id,
+            video_a,
+            video_b
+        )
         
         logger.info(f"Successfully processed both videos for session {session_id}")
         
-        # Return proper JSON response
-        response_data = {
+        return {
             "session_id": session_id,
             "video_a": video_a.dict(),
             "video_b": video_b.dict(),
@@ -137,206 +89,93 @@ async def process_videos(
             "engagement_b": engagement_b.dict()
         }
         
-        return response_data
-        
     except Exception as e:
         logger.error(f"Failed to process videos: {str(e)}")
-        # Return error response with proper JSON
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Failed to process videos: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
-    """
-    Stream chat responses with RAG
-    """
     async def generate():
         try:
-            # Get session data
             session = rag_service.sessions.get(request.session_id)
-            
             if not session:
-                error_msg = "Session not found. Please process videos first."
-                for char in error_msg:
-                    yield f"data: {json.dumps({'content': char})}\n\n"
-                    await asyncio.sleep(0.03)
-                yield "data: [DONE]\n\n"
+                yield {"error": "Session not found"}
                 return
+            
+            # Resolve pronouns using memory
+            resolved_question = conversation_memory.resolve_references(
+                request.session_id, request.message
+            )
             
             video_a = session["video_a"]
             video_b = session["video_b"]
             
-            # SAFE function to format numbers (handles None)
-            def safe_format_number(value):
-                if value is None:
-                    return "N/A"
-                try:
-                    if isinstance(value, (int, float)):
-                        if value >= 1000000:
-                            return f"{value/1000000:.1f}M"
-                        if value >= 1000:
-                            return f"{value/1000:.1f}K"
-                        return f"{value:,}"
-                    return str(value)
-                except:
-                    return "N/A"
+            # Search for chunks
+            chunks = await vector_store.search(resolved_question, request.session_id, top_k=5)
             
-            # SAFE function to format percentage (handles None)
-            def safe_format_percent(value):
-                if value is None:
-                    return "N/A"
-                try:
-                    return f"{value:.2f}%"
-                except:
-                    return "N/A"
+            # Build context with chunk-level citations
+            context = ""
+            for i, chunk in enumerate(chunks):
+                label = chunk.get("label", "Video")
+                text = chunk["text"]
+                context += f"\n[{label} - Chunk {i+1}]: {text}\n"
             
-            # SAFE function to get engagement rate
-            def get_engagement(video):
-                if video.views and video.views > 0 and video.likes is not None and video.comments is not None:
-                    return ((video.likes + video.comments) / video.views) * 100
-                return None
+            if not context:
+                if video_a.transcript:
+                    context += f"\n[A - Full Transcript]: {video_a.transcript[:1000]}\n"
+                if video_b.transcript:
+                    context += f"\n[B - Full Transcript]: {video_b.transcript[:1000]}\n"
             
-            engagement_a = get_engagement(video_a)
-            engagement_b = get_engagement(video_b)
+            question_lower = resolved_question.lower()
             
-            question = request.message.lower()
+            # Route to specific handlers
+            if "improvement" in question_lower or "suggest" in question_lower:
+                prompt = f"""Based on Video A's success, suggest specific improvements for Video B.
+
+Video A Content: {video_a.transcript[:800] if video_a.transcript else 'N/A'}
+Video B Content: {video_b.transcript[:800] if video_b.transcript else 'N/A'}
+
+Provide 3-5 actionable recommendations for Video B."""
             
-            # Build response based on question
-            if "engagement" in question:
-                response = f"**📊 Engagement Rate Analysis**\n\n"
-                
-                # Video A
-                response += f"**Video A ({video_a.creator})**\n"
-                response += f"• Engagement Rate: {safe_format_percent(engagement_a)}\n"
-                response += f"• Views: {safe_format_number(video_a.views)}\n"
-                response += f"• Likes: {safe_format_number(video_a.likes)}\n"
-                response += f"• Comments: {safe_format_number(video_a.comments)}\n\n"
-                
-                # Video B
-                response += f"**Video B ({video_b.creator})**\n"
-                response += f"• Engagement Rate: {safe_format_percent(engagement_b)}\n"
-                response += f"• Views: {safe_format_number(video_b.views)}\n"
-                response += f"• Likes: {safe_format_number(video_b.likes)}\n"
-                response += f"• Comments: {safe_format_number(video_b.comments)}\n\n"
-                
-                # Comparison
-                if engagement_a is not None and engagement_b is not None:
-                    if engagement_a > engagement_b:
-                        diff = engagement_a - engagement_b
-                        response += f"**🎯 Conclusion:** Video A has {diff:.2f}% higher engagement rate."
-                    else:
-                        diff = engagement_b - engagement_a
-                        response += f"**🎯 Conclusion:** Video B has {diff:.2f}% higher engagement rate."
-                elif engagement_a is not None:
-                    response += f"**🎯 Conclusion:** Video A engagement: {engagement_a:.2f}% (Video B data insufficient)"
-                elif engagement_b is not None:
-                    response += f"**🎯 Conclusion:** Video B engagement: {engagement_b:.2f}% (Video A data insufficient)"
-                else:
-                    response += f"**🎯 Conclusion:** Insufficient data to calculate engagement rates."
-            
-            elif "hook" in question or "first 5" in question:
-                hook_a = (video_a.transcript[:200] if video_a.transcript else "No transcript available")
-                hook_b = (video_b.transcript[:200] if video_b.transcript else "No transcript available")
-                
-                response = f"**🎬 Hook Analysis (First 5-10 seconds)**\n\n"
-                response += f"**Video A Hook:**\n\"{hook_a}...\"\n\n"
-                response += f"**Video B Hook:**\n\"{hook_b}...\"\n\n"
-                
-                if len(hook_a) > 100 and len(hook_b) < 100:
-                    response += f"**💡 Analysis:** Video A has a more detailed hook that likely captures attention better."
-                elif len(hook_b) > 100:
-                    response += f"**💡 Analysis:** Video B's hook is detailed and engaging."
-                else:
-                    response += f"**💡 Analysis:** Both hooks could be strengthened. Consider adding a compelling question or statement in the first 5 seconds."
-            
-            elif "creator" in question or "who is" in question:
-                response = f"**👤 Creator Information**\n\n"
-                response += f"**Video A Creator:** {video_a.creator}\n"
-                response += f"Platform: {video_a.platform.value.upper()}\n\n"
-                response += f"**Video B Creator:** {video_b.creator}\n"
-                response += f"Platform: {video_b.platform.value.upper()}\n"
-            
-            elif "improvement" in question or "suggest" in question:
-                response = f"**🚀 Improvement Suggestions**\n\n"
-                
-                if engagement_a is not None and engagement_b is not None and engagement_a > engagement_b:
-                    diff = engagement_a - engagement_b
-                    response += f"Based on Video A's {diff:.1f}% higher engagement rate:\n\n"
-                    response += f"**Suggestions for Video B:**\n"
-                    response += f"1. **Strengthen the hook** - Grab attention within first 5 seconds\n"
-                    response += f"2. **Add clear call-to-action** - Encourage likes and comments\n"
-                    response += f"3. **Improve value delivery** - Show benefits early\n"
-                    response += f"4. **Optimize length** - Keep content concise\n\n"
-                    response += f"**What works in Video A:**\n"
-                    if video_a.transcript:
-                        response += f"• {video_a.transcript[:100]}...\n"
-                else:
-                    response += f"**General improvements for both videos:**\n"
-                    response += f"1. Start with a compelling question or statement\n"
-                    response += f"2. Show value within first 10 seconds\n"
-                    response += f"3. End with a clear call-to-action\n"
-                    response += f"4. Use pattern interrupts to maintain attention\n"
+            elif "hook" in question_lower or "opening" in question_lower:
+                prompt = f"""Compare these hooks:
+Video A: "{video_a.transcript[:200] if video_a.transcript else 'N/A'}"
+Video B: "{video_b.transcript[:200] if video_b.transcript else 'N/A'}"
+Analyze which is stronger and why."""
             
             else:
-                # General analysis
-                response = f"**📹 Video Analysis Summary**\n\n"
-                response += f"**Video A ({video_a.creator})**\n"
-                response += f"• Platform: {video_a.platform.value.upper()}\n"
-                response += f"• Views: {safe_format_number(video_a.views)}\n"
-                if engagement_a:
-                    response += f"• Engagement: {engagement_a:.2f}%\n"
-                response += f"• Hashtags: {', '.join(video_a.hashtags[:3]) if video_a.hashtags else 'None'}\n\n"
-                
-                response += f"**Video B ({video_b.creator})**\n"
-                response += f"• Platform: {video_b.platform.value.upper()}\n"
-                response += f"• Views: {safe_format_number(video_b.views)}\n"
-                if engagement_b:
-                    response += f"• Engagement: {engagement_b:.2f}%\n"
-                response += f"• Hashtags: {', '.join(video_b.hashtags[:3]) if video_b.hashtags else 'None'}\n\n"
-                
-                response += f"**What would you like to know more about?**\n"
-                response += f"• Engagement rates comparison\n"
-                response += f"• Hook analysis\n"
-                response += f"• Improvement suggestions\n"
-                response += f"• Creator information"
+                prompt = f"""Answer based on transcripts:
+{context}
+Question: {resolved_question}
+Be specific and cite chunks."""
             
-            # Stream the response
-            for char in response:
-                yield f"data: {json.dumps({'content': char})}\n\n"
-                await asyncio.sleep(0.015)
+            # Stream response
+            async for chunk in llm_service.generate_response(prompt):
+                yield f"data: {json.dumps({'content': chunk})}\n\n"
             
-            # Add citations
+            # Add chunk-level citations
             citations = []
-            if video_a.transcript:
-                citations.append({"source": f"Video A ({video_a.platform.value})", "preview": video_a.transcript[:100]})
-            if video_b.transcript:
-                citations.append({"source": f"Video B ({video_b.platform.value})", "preview": video_b.transcript[:100]})
+            for i, chunk in enumerate(chunks[:3]):
+                citations.append({
+                    "source": f"Video {chunk.get('label', 'Unknown')} - Chunk {i+1}",
+                    "preview": chunk["text"][:100] + "..."
+                })
             
             if citations:
                 yield f"data: {json.dumps({'citations': citations})}\n\n"
             
+            # Store in memory
+            conversation_memory.add_message(request.session_id, "user", request.message)
+            # Response will be added after streaming
+            
             yield "data: [DONE]\n\n"
             
         except Exception as e:
-            logger.error(f"Chat stream error: {str(e)}")
-            error_msg = f"Error: {str(e)}"
-            for char in error_msg:
-                yield f"data: {json.dumps({'error': char})}\n\n"
-                await asyncio.sleep(0.03)
-            yield "data: [DONE]\n\n"
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
     
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
-    )
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
 
 @router.get("/session/{session_id}/history")
 async def get_session_history(session_id: str):
@@ -345,54 +184,7 @@ async def get_session_history(session_id: str):
     return {"session_id": session_id, "history": history}
 
 
-@router.post("/chat/quick-answer")
-async def quick_answer(request: ChatRequest):
-    """Fast path for specific query types"""
-    
-    session = rag_service.sessions.get(request.session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    video_a = session["video_a"]
-    video_b = session["video_b"]
-    
-    question_lower = request.message.lower()
-    
-    # Route to specific handlers
-    if "engagement" in question_lower:
-        response = await query_handlers.handle_engagement_query(
-            video_a.dict(), video_b.dict()
-        )
-    elif "hook" in question_lower or "first 5" in question_lower:
-        response = await query_handlers.handle_hook_comparison(
-            video_a.transcript or "", video_b.transcript or ""
-        )
-    elif "creator" in question_lower or "who is" in question_lower:
-        response = await query_handlers.handle_creator_info(
-            video_a.creator, video_a.creator_followers or 0,
-            video_b.creator, video_b.creator_followers or 0
-        )
-    elif "improvement" in question_lower or "suggest" in question_lower:
-        response = await query_handlers.handle_improvement_suggestions(
-            ["strong hook", "clear value proposition"],
-            ["weak opening", "low engagement"],
-            15.5
-        )
-    else:
-        # Fall back to regular RAG
-        return await chat_stream(request)
-    
-    return {"response": response, "quick_answer": True}
-
-
-@router.get("/session/{session_id}/stats")
-async def get_session_stats(session_id: str):
-    """Get session statistics from memory"""
-    stats = conversation_memory.get_session_stats(session_id)
-    return stats
-
-
 @router.get("/test")
 async def test_endpoint():
     """Test endpoint to verify API is working"""
-    return {"message": "API is working!", "status": "ok"}
+    return {"message": "API is working!", "status": "ok"} 

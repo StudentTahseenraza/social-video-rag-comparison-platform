@@ -1,333 +1,134 @@
-import asyncio
 from typing import Dict, Any, List, AsyncGenerator
 from datetime import datetime
-from collections import defaultdict
 from app.services.vector_store import vector_store
 from app.services.llm_service import llm_service
-from app.services.memory_service import conversation_memory
-from app.agents.video_analyzer_agent import video_analyzer_agent
-from app.models.schemas import VideoMetadata, ChatMessage
+from app.models.schemas import VideoMetadata
 from app.utils.helpers import setup_logging
+from langchain_core.messages import HumanMessage
 
 logger = setup_logging()
 
 class RAGService:
-    """Enhanced RAG service with agent support and advanced memory"""
-    
     def __init__(self):
         self.sessions: Dict[str, Dict[str, Any]] = {}
-        self.agent = None
-        
-    async def initialize_agent(self):
-        """Initialize the LangGraph agent"""
-        if not self.agent:
-            self.agent = video_analyzer_agent
-            self.agent.build_workflow()
-            logger.info("LangGraph agent initialized")
     
-    async def store_video_transcript(
-    self, 
-    session_id: str, 
-    video_a: VideoMetadata, 
-    video_b: VideoMetadata
-):
-        """Store video transcripts - simplified for demo"""
+    async def store_video_transcript(self, session_id: str, video_a: VideoMetadata, video_b: VideoMetadata):
+        """Store video transcripts"""
         try:
-            # Initialize session only, skip vector store
+            logger.info(f"STORING TRANSCRIPTS FOR SESSION {session_id}")
+            
             self.sessions[session_id] = {
                 "video_a": video_a,
                 "video_b": video_b,
                 "chat_history": [],
-                "created_at": datetime.now(),
-                "video_metrics": {
-                    "a_engagement": self._calculate_engagement(video_a),
-                    "b_engagement": self._calculate_engagement(video_b),
-                    "comparison_ready": True
-                }
+                "created_at": datetime.now()
             }
             
-            logger.info(f"Session {session_id} initialized successfully (vector store disabled)")
-            
-        except Exception as e:
-            logger.error(f"Failed to store transcripts: {str(e)}")
-            # Still create session even if vector store fails
-            self.sessions[session_id] = {
-                "video_a": video_a,
-                "video_b": video_b,
-                "chat_history": [],
-                "created_at": datetime.now(),
-            }
-    
-    async def chat_stream(
-        self,
-        session_id: str,
-        question: str,
-        video_a_id: str,
-        video_b_id: str
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Stream chat response with agent-based reasoning"""
-        
-        try:
-            # Get session data
-            session = self.sessions.get(session_id)
-            if not session:
-                yield {"error": "Session not found"}
-                return
-            
-            # Get conversation context
-            context = conversation_memory.get_context(session_id, last_n=5)
-            
-            # Check if this is a follow-up question (has pronouns referring to previous)
-            is_followup = self._is_followup_question(question, context)
-            
-            if is_followup:
-                # Resolve pronouns using context
-                resolved_question = await self._resolve_references(question, session_id)
-                logger.info(f"Resolved follow-up: '{question}' -> '{resolved_question}'")
-                question = resolved_question
-            
-            # Use agent for complex questions
-            if self._is_complex_question(question):
-                logger.info(f"Using LangGraph agent for complex question: {question}")
-                
-                async for result in self.agent.process_question(
+            if video_a.transcript:
+                logger.info(f"Video A transcript: {len(video_a.transcript)} chars")
+                result = vector_store.store_video_chunks_sync(
                     session_id=session_id,
-                    question=question,
-                    video_a_id=video_a_id,
-                    video_b_id=video_b_id
-                ):
-                    if result.get("type") == "complete":
-                        # Store in memory
-                        conversation_memory.add_message(
-                            session_id, "user", question, {"important": True}
-                        )
-                        conversation_memory.add_message(
-                            session_id, "assistant", result["content"], 
-                            {"citations": result.get("citations", [])}
-                        )
-                        
-                        yield {
-                            "content": result["content"],
-                            "citations": result.get("citations", []),
-                            "analysis_steps": result.get("analysis_steps", [])
-                        }
-                    elif result.get("type") == "analysis":
-                        yield {"thinking": result["content"]}
-                    elif result.get("type") == "error":
-                        yield {"error": result["error"]}
-            else:
-                # Use simple RAG for straightforward questions
-                async for chunk in self._simple_rag_response(
-                    session_id, question, video_a_id, video_b_id, context
-                ):
-                    yield chunk
+                    video_id=video_a.video_id,
+                    label="A",
+                    transcript=video_a.transcript,
+                    metadata={"creator": video_a.creator, "platform": video_a.platform.value}
+                )
+                logger.info(f"✅ Stored {result} chunks for Video A")
+            
+            if video_b.transcript:
+                logger.info(f"Video B transcript: {len(video_b.transcript)} chars")
+                result = vector_store.store_video_chunks_sync(
+                    session_id=session_id,
+                    video_id=video_b.video_id,
+                    label="B",
+                    transcript=video_b.transcript,
+                    metadata={"creator": video_b.creator, "platform": video_b.platform.value}
+                )
+                logger.info(f"✅ Stored {result} chunks for Video B")
+            
+            stats = await vector_store.get_collection_stats()
+            logger.info(f"📊 Vector DB stats: {stats}")
             
         except Exception as e:
-            logger.error(f"Chat stream error: {str(e)}")
-            yield {"error": str(e)}
+            logger.error(f"Failed to store transcripts: {e}")
     
-    async def _simple_rag_response(
-        self,
-        session_id: str,
-        question: str,
-        video_a_id: str,
-        video_b_id: str,
-        context: List[Dict[str, Any]]
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Simple RAG response for straightforward questions"""
+    async def chat_stream(self, session_id: str, question: str, video_a_id: str, video_b_id: str):
+        """Stream chat response using RAG with actual transcript retrieval"""
         
-        session = self.sessions[session_id]
-        
-        # Retrieve relevant chunks
-        chunks = await vector_store.retrieve_relevant_chunks(
-            query=question,
-            session_id=session_id,
-            video_a_id=video_a_id,
-            video_b_id=video_b_id,
-            top_k=5
-        )
-        
-        # Enrich chunks with metadata
-        enriched_chunks = await self._enrich_chunks_with_metadata(chunks, session)
-        
-        # Build prompt with context
-        prompt = self._build_rag_prompt(question, enriched_chunks, context)
-        
-        # Stream response
-        full_response = ""
-        async for chunk in llm_service.llm.astream([HumanMessage(content=prompt)]):
-            if chunk.content:
-                full_response += chunk.content
-                yield {"content": chunk.content}
-        
-        # Generate citations
-        citations = self._generate_citations(enriched_chunks)
-        
-        # Store in memory
-        conversation_memory.add_message(session_id, "user", question)
-        conversation_memory.add_message(session_id, "assistant", full_response, {"citations": citations})
-        
-        yield {"citations": citations}
-    
-    def _is_complex_question(self, question: str) -> bool:
-        """Determine if question requires agent-based reasoning"""
-        
-        complex_patterns = [
-            "why did", "compare", "analyze", "explain", 
-            "what worked", "suggest improvements", "difference between",
-            "how could", "what if", "what makes"
-        ]
-        
-        question_lower = question.lower()
-        return any(pattern in question_lower for pattern in complex_patterns)
-    
-    def _is_followup_question(self, question: str, context: List[Dict[str, Any]]) -> bool:
-        """Check if question references previous conversation"""
-        
-        followup_indicators = ["it", "they", "that", "this", "those", "these", "its", "their"]
-        question_lower = question.lower()
-        
-        # Check for pronouns
-        has_pronoun = any(indicator in question_lower.split() for indicator in followup_indicators)
-        
-        # Check if question is short and context exists
-        is_short = len(question.split()) < 8
-        has_context = len(context) > 0
-        
-        return has_pronoun and is_short and has_context
-    
-    async def _resolve_references(self, question: str, session_id: str) -> str:
-        """Resolve pronouns and references using conversation context"""
-        
-        context = conversation_memory.get_context(session_id, last_n=3)
-        
-        if not context:
-            return question
-        
-        # Get last assistant response
-        last_response = None
-        for msg in reversed(context):
-            if msg["role"] == "assistant":
-                last_response = msg["content"]
-                break
-        
-        if not last_response:
-            return question
-        
-        # Extract key entities from last response
-        entities = []
-        if "video a" in last_response.lower():
-            entities.append("Video A")
-        if "video b" in last_response.lower():
-            entities.append("Video B")
-        
-        # Replace pronouns with entities
-        resolved = question
-        if "it" in resolved.lower() and entities:
-            resolved = resolved.replace("it", entities[0])
-            resolved = resolved.replace("It", entities[0])
-        if "they" in resolved.lower() and entities:
-            resolved = resolved.replace("they", f"{entities[0]} and {entities[1]}" if len(entities) > 1 else entities[0])
-        
-        return resolved
-    
-    async def _enrich_chunks_with_metadata(
-        self, 
-        chunks: List[Dict[str, Any]], 
-        session: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """Add video metadata to chunks"""
+        session = self.sessions.get(session_id)
+        if not session:
+            yield {"error": "Session not found"}
+            return
         
         video_a = session["video_a"]
         video_b = session["video_b"]
         
-        enriched = []
+        # Search for relevant chunks using the vector store
+        chunks = await vector_store.search(question, session_id, top_k=3)
+        
+        # Build context from retrieved chunks
+        context = ""
         for chunk in chunks:
-            video_id = chunk["video_id"]
-            video = video_a if video_a.video_id == video_id else video_b
-            
-            chunk["video_metadata"] = {
-                "title": video.title,
-                "creator": video.creator,
-                "views": video.views,
-                "likes": video.likes,
-                "comments": video.comments,
-                "engagement_rate": self._calculate_engagement(video),
-                "hashtags": video.hashtags[:5]
-            }
-            enriched.append(chunk)
+            label = chunk.get("label", "Video")
+            text = chunk["text"]
+            context += f"\n[{label}]: {text}\n"
+            logger.info(f"Retrieved chunk from {label}: {text[:100]}...")
         
-        return enriched
-    
-    def _build_rag_prompt(
-        self, 
-        question: str, 
-        chunks: List[Dict[str, Any]], 
-        context: List[Dict[str, Any]]
-    ) -> str:
-        """Build prompt for RAG response"""
+        # If no chunks found, use transcripts directly
+        if not context:
+            logger.warning("No chunks found, using direct transcripts")
+            if video_a.transcript:
+                context += f"\n[A]: {video_a.transcript[:1000]}\n"
+            if video_b.transcript:
+                context += f"\n[B]: {video_b.transcript[:1000]}\n"
         
-        context_str = ""
-        for chunk in chunks:
-            label = chunk.get('label', chunk.get('video_id', 'Video'))
-            context_str += f"\n[{label}]: {chunk['text']}\n"
-        
-        history_str = ""
-        for msg in context[-3:]:
-            history_str += f"{msg['role']}: {msg['content']}\n"
-        
-        return f"""You are a video analysis expert. Use the following context to answer the question.
+        # Build prompt that specifically asks for transcript content
+        prompt = f"""You are a video analysis expert. Use the following transcript content to answer the question.
 
-PREVIOUS CONVERSATION:
-{history_str}
-
-RETRIEVED CONTEXT:
-{context_str}
+VIDEO TRANSCRIPTS:
+{context}
 
 QUESTION: {question}
 
 INSTRUCTIONS:
-1. Answer based ONLY on the provided context
-2. Cite which video (A or B) each piece of information comes from
-3. If information is missing, say "Not available in the video data"
-4. Be specific and provide actionable insights
-5. Keep response concise but informative
+1. Answer based ONLY on the transcript content above
+2. If the question asks for specific lyrics or spoken content, quote directly from the transcript
+3. Cite which video (A or B) the information comes from
+4. If the transcript doesn't contain the answer, say "The transcript does not contain that information"
 
 ANSWER:"""
-    
-    def _generate_citations(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Generate citations from chunks"""
-        citations = []
-        seen = set()
         
-        for chunk in chunks:
-            label = chunk.get('label', 'Unknown')
-            if label not in seen:
+        try:
+            full_response = ""
+            async for chunk in llm_service.llm.astream([HumanMessage(content=prompt)]):
+                if chunk.content:
+                    full_response += chunk.content
+                    yield {"content": chunk.content}
+            
+            # Add citations with actual transcript previews
+            citations = []
+            if video_a.transcript:
                 citations.append({
-                    "source": f"Video {label}",
-                    "video_id": chunk["video_id"],
-                    "preview": chunk["text"][:100] + "...",
-                    "relevance": round(chunk.get("relevance_score", 1.0), 3)
+                    "source": f"Video A ({video_a.platform.value})", 
+                    "preview": video_a.transcript[:150] + "..."
                 })
-                seen.add(label)
-        
-        return citations
+            if video_b.transcript:
+                citations.append({
+                    "source": f"Video B ({video_b.platform.value})", 
+                    "preview": video_b.transcript[:150] + "..."
+                })
+            
+            yield {"citations": citations}
+            
+        except Exception as e:
+            logger.error(f"Chat stream error: {e}")
+            yield {"error": str(e)}
     
-    def _calculate_engagement(self, video: VideoMetadata) -> float:
-        """Calculate engagement rate"""
-        if video.views and video.views > 0:
-            total = (video.likes or 0) + (video.comments or 0)
-            return round((total / video.views) * 100, 2)
-        return 0.0
-    
-    async def get_chat_history(self, session_id: str) -> List[Dict[str, Any]]:
-        """Get chat history from memory service"""
-        return conversation_memory.get_context(session_id)
+    async def get_chat_history(self, session_id: str) -> List[Dict]:
+        session = self.sessions.get(session_id, {})
+        return session.get("chat_history", [])
     
     async def cleanup(self):
-        """Cleanup resources"""
-        logger.info("Cleaning up RAG service...")
-        conversation_memory.cleanup_old_sessions()
+        pass
 
-# Global instance
 rag_service = RAGService()
