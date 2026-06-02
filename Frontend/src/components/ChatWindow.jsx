@@ -41,8 +41,11 @@ const ChatWindow = ({ sessionId, videoAId, videoBId }) => {
     setStreamingMessage('')
     setStreamingCitations([])
 
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+
     try {
-      const response = await fetch('http://localhost:8000/api/v1/chat/stream', {
+      const response = await fetch(`${API_URL}/api/v1/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -51,7 +54,7 @@ const ChatWindow = ({ sessionId, videoAId, videoBId }) => {
           video_a_id: videoAId,
           video_b_id: videoBId
         })
-      })
+      });
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
@@ -190,10 +193,10 @@ const ChatWindow = ({ sessionId, videoAId, videoBId }) => {
             >
               <div
                 className={`max-w-[80%] rounded-2xl p-4 ${msg.role === 'user'
-                    ? 'bg-gradient-to-r from-blue-600 to-blue-500 text-white'
-                    : msg.isError
-                      ? 'bg-red-50 border border-red-200 text-red-700'
-                      : 'bg-white border border-gray-200 text-gray-900 shadow-sm'
+                  ? 'bg-gradient-to-r from-blue-600 to-blue-500 text-white'
+                  : msg.isError
+                    ? 'bg-red-50 border border-red-200 text-red-700'
+                    : 'bg-white border border-gray-200 text-gray-900 shadow-sm'
                   }`}
               >
                 {msg.role === 'assistant' && !msg.isError && (

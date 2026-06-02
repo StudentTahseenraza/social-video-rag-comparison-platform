@@ -24,7 +24,7 @@ function App() {
     setLoading(true)
     setError(null)
     setLoadingProgress(0)
-    
+
     const steps = [
       { step: 'Extracting YouTube metadata...', progress: 10 },
       { step: 'Fetching YouTube transcript...', progress: 25 },
@@ -34,7 +34,7 @@ function App() {
       { step: 'Creating embeddings & storing in vector DB...', progress: 90 },
       { step: 'Initializing chat session...', progress: 100 }
     ]
-    
+
     let stepIndex = 0
     const interval = setInterval(() => {
       if (stepIndex < steps.length) {
@@ -43,32 +43,35 @@ function App() {
         stepIndex++
       }
     }, 2000)
-    
+
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+
     try {
-      const response = await fetch('http://localhost:8000/api/v1/process-videos', {
+      const response = await fetch(`${API_URL}/api/v1/process-videos`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ youtube_url: youtubeUrl, instagram_url: instagramUrl })
-      })
-      
+      });
+
       if (!response.ok) {
         const errorData = await response.json()
         throw new Error(errorData.detail || 'Failed to process videos')
       }
-      
+
       const data = await response.json()
       setSessionId(data.session_id)
       setVideoA(data.video_a)
       setVideoB(data.video_b)
       setEngagementA(data.engagement_a)
       setEngagementB(data.engagement_b)
-      
+
       toast.success('Videos processed successfully!', {
         duration: 4000,
         icon: '🎉',
         style: { background: '#10B981', color: 'white' }
       })
-      
+
     } catch (err) {
       console.error('Error:', err)
       setError(err.message)
@@ -99,7 +102,7 @@ function App() {
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50">
       <Toaster position="top-right" />
       <Header />
-      
+
       <main className="max-w-7xl mx-auto px-4 py-8">
         <AnimatePresence mode="wait">
           {!sessionId ? (
@@ -111,7 +114,7 @@ function App() {
               transition={{ duration: 0.5 }}
             >
               <VideoInputForm onSubmit={handleProcessVideos} loading={loading} />
-              
+
               {error && (
                 <motion.div
                   initial={{ opacity: 0, scale: 0.95 }}
@@ -150,23 +153,23 @@ function App() {
                   New Comparison
                 </button>
               </div>
-              
+
               {/* Metrics Panel - Side by Side Comparison */}
-              <MetricsPanel 
-                videoA={videoA} 
-                videoB={videoB} 
-                engagementA={engagementA} 
-                engagementB={engagementB} 
+              <MetricsPanel
+                videoA={videoA}
+                videoB={videoB}
+                engagementA={engagementA}
+                engagementB={engagementB}
               />
-              
+
               {/* Side by Side Video Cards */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
                 <VideoCard video={videoA} engagement={engagementA} label="Video A" />
                 <VideoCard video={videoB} engagement={engagementB} label="Video B" />
               </div>
-              
+
               {/* Chat Interface */}
-              <ChatWindow 
+              <ChatWindow
                 sessionId={sessionId}
                 videoAId={videoA.video_id}
                 videoBId={videoB.video_id}
@@ -175,7 +178,7 @@ function App() {
           )}
         </AnimatePresence>
       </main>
-      
+
       <LoadingModal isOpen={loading} step={loadingStep} progress={loadingProgress} />
     </div>
   )
