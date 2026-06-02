@@ -3,13 +3,12 @@
   "outputDirectory": "dist",
   "installCommand": "npm install",
   "framework": "vite",
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/"
-    }
-  ],
   "env": {
     "VITE_API_URL": "https://social-video-rag-comparison-platform-1.onrender.com"
+  },
+  "build": {
+    "env": {
+      "VITE_API_URL": "https://social-video-rag-comparison-platform-1.onrender.com"
+    }
   }
 }
