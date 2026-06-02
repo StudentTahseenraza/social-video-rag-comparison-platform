@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: rag-chatbot-backend
+    runtime: python
+    repo: https://github.com/YOUR_USERNAME/rag-chatbot
+    plan: free
+    region: oregon
+    buildCommand: |
+      cd backend
+      pip install -r requirements.txt
+    startCommand: |
+      cd backend
+      uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "False"
