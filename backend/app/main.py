@@ -57,21 +57,19 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# CORS for frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173", 
-        "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "https://*.vercel.app",
-        "https://*.railway.app"
+        "http://localhost:5173",           # Local development
+        "http://localhost:3000",            # Local alternative
+        "https://social-video-rag-comparison-platfor.vercel.app",  # Your Vercel URL
+        "https://*.vercel.app",              # All Vercel preview deployments
+        "https://social-video-rag-comparison-platform-1.onrender.com",  # Self URL
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"]
+    allow_methods=["*"],                     # Allow all HTTP methods
+    allow_headers=["*"],                     # Allow all headers
+    expose_headers=["*"],
 )
 
 # Include router with /api/v1 prefix
