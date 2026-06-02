@@ -5,28 +5,15 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    host: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: import.meta.env.VITE_API_URL || 'http://localhost:8000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, '')
       }
     }
   },
   build: {
     outDir: 'dist',
-    sourcemap: true,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'framer-motion'],
-          ui: ['react-hot-toast', 'react-icons', 'react-markdown']
-        }
-      }
-    }
-  },
-  optimizeDeps: {
-    include: ['react', 'react-dom', 'framer-motion', 'react-hot-toast', 'react-icons', 'react-markdown']
+    sourcemap: true
   }
 })
