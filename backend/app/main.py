@@ -62,7 +62,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",           # Local development
         "http://localhost:3000",            # Local alternative
-        "https://social-video-rag-comparison-platfor.vercel.app",  # Your Vercel URL
+        "https://social-video-rag-comparison-platfor-eight.vercel.app",  # Your Vercel URL
         "https://*.vercel.app",              # All Vercel preview deployments
         "https://social-video-rag-comparison-platform-1.onrender.com",  # Self URL
     ],
